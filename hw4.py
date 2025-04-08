@@ -2,7 +2,7 @@ import logging
 import re
 import sys
 from bs4 import BeautifulSoup
-from queue import Queue
+from queue import Queue, PriorityQueue
 from urllib import parse, request
 
 logging.basicConfig(level=logging.DEBUG, filename='output.log', filemode='w')
@@ -18,13 +18,16 @@ def parse_links(root, html):
             text = link.string
             if not text:
                 text = ''
-            text = re.sub('\s+', ' ', text).strip()
-            yield (parse.urljoin(root, link.get('href')), text)
+            text = re.sub(r'\s+', ' ', text).strip()
+            yield (parse.urljoin(root, href), text)
 
 
 def parse_links_sorted(root, html):
-    # TODO: implement
-    return []
+    links = list(parse_links(root, html))
+    def relevance(pair):
+        _, text = pair
+        return -sum(c.isalnum() for c in text) 
+    return sorted(links, key=relevance)
 
 
 def get_links(url):
@@ -41,79 +44,55 @@ def get_nonlocal_links(url):
     but only keep non-local links and non self-references.
     Return a list of (link, title) pairs, just like get_links()'''
 
-    # TODO: implement
+
     links = get_links(url)
-    parsed_root = parse.urlparse(url)
-    root_domain = strip_www(parsed_root.netloc)
-    root_path = parsed_root.path.rstrip('/')
-
-
     filtered = []
+    root_parts = parse.urlparse(url)
 
-    for link_url, title in links:
-        parsed_link = parse.urlparse(link_url)
-        link_domain = strip_www(parsed_link.netloc)
-        # to check if its self referencing -- check same domain and same path
-        same_domain = link_domain == root_domain
-        same_path = parsed_link.path.rstrip('/') == root_path
-        is_fragment = parsed_link.fragment != ''
-        
-        if same_domain and (same_path or is_fragment):
-            continue  # Skip self-reference
+    for link, text in links:
+        link_parts = parse.urlparse(link)
 
-        if not same_domain:
-            filtered.append((link_url, title))
+        if link_parts.netloc and link_parts.netloc != root_parts.netloc:
+            filtered.append((link, text))
+            continue
+
+        same_path = root_parts.path.rstrip('/') == link_parts.path.rstrip('/')
+        is_self_ref = same_path or link_parts.fragment
+        if not is_self_ref:
+            filtered.append((link, text))
+
     return filtered
 
-#uncomment the lines below marked with depth limit, to use depth limited crawling for faster testing
-def crawl(root, wanted_content=[], within_domain=True, max_depth = 2):
+
+
+def crawl(root, wanted_content=[], within_domain=True):    
     '''Crawl the url specified by `root`.
     `wanted_content` is a list of content types to crawl
     `within_domain` specifies whether the crawler should limit itself to the domain of `root`
     '''
-    # TODO: implement
-
     queue = Queue()
+    queue.put(root)
 
-    queue.put(root) #without depth limit
-    #queue.put((root, 0))  # version with depth limit
-
-
-    visited = []
-    visited_set = set()
+    visited = set()
     extracted = []
 
     parsed_root = parse.urlparse(root)
-    root_domain = parsed_root.netloc.lower().lstrip("www.")
-
+    base_domain = parsed_root.netloc
 
     while not queue.empty():
-        url = queue.get() #version without depth limit
-        #url, current_depth = queue.get() #with depth limit
+        url = queue.get()
+        if url in visited:
+            continue
 
-        #if current_depth > max_depth: #add this in to test with DEPTH LIMIT 
-        #    continue  
-
-        parsed_url = parse.urlparse(url)
-        clean_url = parsed_url.geturl()
-        if clean_url in visited_set:
-            continue #already visited. 
-        if within_domain:
-            link_domain = parsed_url.netloc.lower().lstrip("www.")
-            if link_domain != root_domain:
-                continue
         try:
             req = request.urlopen(url)
-            content_type = req.headers.get("Content-Type", "")
+            content_type = req.headers.get('Content-Type', '')
 
-            if wanted_content and not any(ct in content_type for ct in wanted_content):
-                continue  # if its not the right content type, skip
+            if wanted_content and not any(t in content_type for t in wanted_content):
+                continue
 
             html = req.read()
-
-            visited.append(url)
-            visited_set.add(clean_url)
-
+            visited.add(url)
             visitlog.debug(url)
 
             for ex in extract_information(url, html):
@@ -122,42 +101,41 @@ def crawl(root, wanted_content=[], within_domain=True, max_depth = 2):
 
             for link, title in parse_links(url, html):
                 parsed_link = parse.urlparse(link)
-                if parsed_link.geturl() == parsed_url.geturl():
-                    continue  #skip self reference
-                queue.put(link) #version without depth limit
-                #queue.put((link, current_depth + 1))  # add this in to test with DEPTH LIMIT
-
+                if within_domain and parsed_link.netloc != '' and parsed_link.netloc != base_domain:
+                    continue
+                if link not in visited:
+                    queue.put(link)
 
         except Exception as e:
             print(e, url)
 
-    return visited, extracted
+    return list(visited), extracted
 
 
 def extract_information(address, html):
     '''Extract contact information from html, returning a list of (url, category, content) pairs,
     where category is one of PHONE, ADDRESS, EMAIL'''
 
-    # TODO: implement
+    text = str(html)
     results = []
-    text = html.decode(errors='ignore')  # decode bytes to string 
 
-    
-    #phone number 
-    for match in re.findall('\d\d\d-\d\d\d-\d\d\d\d', str(html)):
+    phone_pattern = r'\b(?:\(?\d{3}\)?[-.\s]?){2}\d{4}\b'
+    for match in re.findall(phone_pattern, text):
         results.append((address, 'PHONE', match))
-    
-    #email regex
-    email_pattern = r'[\w\.-]+@[\w\.-]+\.\w+'
+
+    email_pattern = r'\b[\w\.-]+@[\w\.-]+\.\w{2,6}\b'
     for match in re.findall(email_pattern, text):
         results.append((address, 'EMAIL', match))
 
-    #address regex
-    address_pattern = r'([A-Z][a-zA-Z]+(?: [A-Z][a-zA-Z]+)*,\s*[A-Z][a-zA-Z\.]+\s+\d{5})'
+    address_pattern = r'\b([A-Z][a-z]+(?: [A-Z][a-z]+)*),?\s+(?:[A-Z]{2}|[A-Z][a-z]+\.?)\s+\d{5}(?:-\d{4})?\b'
     for match in re.findall(address_pattern, text):
-        results.append((address, 'ADDRESS', match))
+        city = match
+        full = re.search(city + r'.{0,20}(\d{5}(?:-\d{4})?)', text)
+        if full:
+            results.append((address, 'ADDRESS', city + ", " + full.group(1)))
 
     return results
+
 
 
 def writelines(filename, data):
@@ -168,14 +146,13 @@ def writelines(filename, data):
 
 def main():
     site = sys.argv[1]
-
     links = get_links(site)
     writelines('links.txt', links)
 
     nonlocal_links = get_nonlocal_links(site)
     writelines('nonlocal.txt', nonlocal_links)
 
-    visited, extracted = crawl(site)
+    visited, extracted = crawl(site, wanted_content=['text/html'], within_domain=True)
     writelines('visited.txt', visited)
     writelines('extracted.txt', extracted)
 
