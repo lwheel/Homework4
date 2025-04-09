@@ -1,0 +1,8 @@
+('https://www.cs.jhu.edu/~yarowsky/', 'PHONE', '410) 516-5372')
+('https://www.cs.jhu.edu/~yarowsky/', 'PHONE', '1993-2012')
+('https://www.cs.jhu.edu/~yarowsky/', 'PHONE', '1996-1999')
+('https://www.cs.jhu.edu/~yarowsky/', 'EMAIL', 'yarowsky@jhu.edu')
+('https://www.cs.jhu.edu/~yarowsky/', 'ADDRESS', 'Baltimore, MD 21218')
+('https://www.cs.jhu.edu/~yarowsky/466.officehours.html', 'EMAIL', 'arya@jhu.edu')
+('https://www.cs.jhu.edu/~yarowsky/466.officehours.html', 'EMAIL', 'czhan105@jhu.edu')
+('https://www.cs.jhu.edu/~yarowsky/466.officehours.html', 'EMAIL', 'smei5@jhu.edu')

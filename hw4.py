@@ -79,11 +79,13 @@ def crawl(root, wanted_content=[], within_domain=True):
     parsed_root = parse.urlparse(root)
     base_domain = parsed_root.netloc
 
+
     while not queue.empty():
         url = queue.get()
         if url in visited:
             continue
-
+        visited.add(url)
+        visitlog.debug(url)
         try:
             req = request.urlopen(url)
             content_type = req.headers.get('Content-Type', '')
@@ -92,11 +94,10 @@ def crawl(root, wanted_content=[], within_domain=True):
                 continue
 
             html = req.read()
-            visited.add(url)
-            visitlog.debug(url)
 
             for ex in extract_information(url, html):
                 extracted.append(ex)
+                
                 extractlog.debug(ex)
 
             for link, title in parse_links(url, html):
@@ -108,7 +109,11 @@ def crawl(root, wanted_content=[], within_domain=True):
 
         except Exception as e:
             print(e, url)
+            
 
+    print(f"[DEBUG] Total extracted: {len(extracted)}")
+
+    print(extracted)
     return list(visited), extracted
 
 
@@ -127,7 +132,12 @@ def extract_information(address, html):
     for match in re.findall(email_pattern, text):
         results.append((address, 'EMAIL', match))
 
-    address_pattern = r'\b([A-Z][a-z]+(?: [A-Z][a-z]+)*),?\s+(?:[A-Z]{2}|[A-Z][a-z]+\.?)\s+\d{5}(?:-\d{4})?\b'
+    #address_pattern = r'\b([A-Z][a-z]+(?: [A-Z][a-z]+)*),?\s+(?:[A-Z]{2}|[A-Z][a-z]+\.?)\s+\d{5}(?:-\d{4})?\b'
+    #added the following to be more specific, but it didn't really change the score so it may or may not be necessary
+    city_pattern = r'[A-Z][a-z]+(?: [A-Z][a-z]+)*'
+    state_pattern = r'(?:[A-Z]{2}|[A-Z][a-z]+\.?|[A-Z][a-z]+)'
+    zip_pattern = r'\d{5}(?:-\d{4})?'
+    address_pattern = rf'\b({city_pattern}),\s+({state_pattern})\s+({zip_pattern})\b'
     for match in re.findall(address_pattern, text):
         city = match
         full = re.search(city + r'.{0,20}(\d{5}(?:-\d{4})?)', text)
@@ -153,6 +163,9 @@ def main():
     writelines('nonlocal.txt', nonlocal_links)
 
     visited, extracted = crawl(site, wanted_content=['text/html'], within_domain=True)
+    #visited, extracted = crawl(site, wanted_content=[], within_domain=True)
+    writelines('extracted.txt', extracted)
+
     writelines('visited.txt', visited)
     writelines('extracted.txt', extracted)
 
