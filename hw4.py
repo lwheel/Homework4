@@ -2,7 +2,7 @@ import logging
 import re
 import sys
 from bs4 import BeautifulSoup
-from queue import Queue, PriorityQueue
+from queue import Queue
 from urllib import parse, request
 
 logging.basicConfig(level=logging.DEBUG, filename='output.log', filemode='w')
@@ -15,18 +15,18 @@ def parse_links(root, html):
     for link in soup.find_all('a'):
         href = link.get('href')
         if href:
-            text = link.string
-            if not text:
-                text = ''
+            text = link.string or ''
             text = re.sub(r'\s+', ' ', text).strip()
             yield (parse.urljoin(root, href), text)
 
 
 def parse_links_sorted(root, html):
     links = list(parse_links(root, html))
+
     def relevance(pair):
         _, text = pair
-        return -sum(c.isalnum() for c in text) 
+        return -sum(c.isalnum() for c in text)
+
     return sorted(links, key=relevance)
 
 
@@ -34,17 +34,15 @@ def get_links(url):
     res = request.urlopen(url)
     return list(parse_links(url, res.read()))
 
-#to help comparing same domains ( with www and without, strip all of them for ease)
+
 def strip_www(domain):
-    """Remove 'www.' from the start of a domain, if present."""
     return domain.lower().lstrip("www.")
+
 
 def get_nonlocal_links(url):
     '''Get a list of links on the page specificed by the url,
     but only keep non-local links and non self-references.
     Return a list of (link, title) pairs, just like get_links()'''
-
-
     links = get_links(url)
     filtered = []
     root_parts = parse.urlparse(url)
@@ -64,8 +62,7 @@ def get_nonlocal_links(url):
     return filtered
 
 
-
-def crawl(root, wanted_content=[], within_domain=True):    
+def crawl(root, wanted_content=[], within_domain=True):
     '''Crawl the url specified by `root`.
     `wanted_content` is a list of content types to crawl
     `within_domain` specifies whether the crawler should limit itself to the domain of `root`
@@ -79,7 +76,6 @@ def crawl(root, wanted_content=[], within_domain=True):
     parsed_root = parse.urlparse(root)
     base_domain = parsed_root.netloc
 
-
     while not queue.empty():
         url = queue.get()
         if url in visited:
@@ -89,30 +85,25 @@ def crawl(root, wanted_content=[], within_domain=True):
         try:
             req = request.urlopen(url)
             content_type = req.headers.get('Content-Type', '')
-
             if wanted_content and not any(t in content_type for t in wanted_content):
                 continue
-
             html = req.read()
 
             for ex in extract_information(url, html):
                 extracted.append(ex)
-                
                 extractlog.debug(ex)
 
             for link, title in parse_links(url, html):
                 parsed_link = parse.urlparse(link)
-                if within_domain and parsed_link.netloc != '' and parsed_link.netloc != base_domain:
+                if within_domain and parsed_link.netloc and parsed_link.netloc != base_domain:
                     continue
                 if link not in visited:
                     queue.put(link)
 
         except Exception as e:
             print(e, url)
-            
 
     print(f"[DEBUG] Total extracted: {len(extracted)}")
-
     print(extracted)
     return list(visited), extracted
 
@@ -121,31 +112,30 @@ def extract_information(address, html):
     '''Extract contact information from html, returning a list of (url, category, content) pairs,
     where category is one of PHONE, ADDRESS, EMAIL'''
 
-    text = str(html)
-    results = []
+    if isinstance(html, (bytes, bytearray)):
+        html = html.decode('utf-8', errors='ignore')
+    text = BeautifulSoup(html, 'html.parser').get_text(" ", strip=True)
 
-    phone_pattern = r'\b(?:\(?\d{3}\)?[-.\s]?){2}\d{4}\b'
-    for match in re.findall(phone_pattern, text):
-        results.append((address, 'PHONE', match))
+    alt = re.sub(r'(?i)\s*(\(|\[)?\s*at\s*(\)|\])?\s*', '@',  text)
+    alt = re.sub(r'(?i)\s*(\(|\[)?\s*dot\s*(\)|\])?\s*', '.', alt)
 
-    email_pattern = r'\b[\w\.-]+@[\w\.-]+\.\w{2,6}\b'
-    for match in re.findall(email_pattern, text):
-        results.append((address, 'EMAIL', match))
+    phone_re   = re.compile(r'\(?\b\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b')
+    email_re   = re.compile(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}')
+    address_re = re.compile(
+        r'[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*\s*,\s*'
+        r'(?:[A-Z]{2}|[A-Z][a-z]+\.?(?:\s+[A-Z][a-z]+\.?)*)\s+'
+        r'\d{5}(?:-\d{4})?',
+        re.IGNORECASE)
+    
+    results = set()
+    for m in phone_re.findall(text):
+        results.add((address, 'PHONE', m))
+    for m in email_re.findall(text) + email_re.findall(alt):
+        results.add((address, 'EMAIL', m))
+    for m in address_re.findall(text):
+        results.add((address, 'ADDRESS', m.strip()))
 
-    #address_pattern = r'\b([A-Z][a-z]+(?: [A-Z][a-z]+)*),?\s+(?:[A-Z]{2}|[A-Z][a-z]+\.?)\s+\d{5}(?:-\d{4})?\b'
-    #added the following to be more specific, but it didn't really change the score so it may or may not be necessary
-    city_pattern = r'[A-Z][a-z]+(?: [A-Z][a-z]+)*'
-    state_pattern = r'(?:[A-Z]{2}|[A-Z][a-z]+\.?|[A-Z][a-z]+)'
-    zip_pattern = r'\d{5}(?:-\d{4})?'
-    address_pattern = rf'\b({city_pattern}),\s+({state_pattern})\s+({zip_pattern})\b'
-    for match in re.findall(address_pattern, text):
-        city = match
-        full = re.search(city + r'.{0,20}(\d{5}(?:-\d{4})?)', text)
-        if full:
-            results.append((address, 'ADDRESS', city + ", " + full.group(1)))
-
-    return results
-
+    return list(results)
 
 
 def writelines(filename, data):
@@ -163,11 +153,8 @@ def main():
     writelines('nonlocal.txt', nonlocal_links)
 
     visited, extracted = crawl(site, wanted_content=['text/html'], within_domain=True)
-    #visited, extracted = crawl(site, wanted_content=[], within_domain=True)
     writelines('extracted.txt', extracted)
-
     writelines('visited.txt', visited)
-    writelines('extracted.txt', extracted)
 
 
 if __name__ == '__main__':
