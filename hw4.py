@@ -107,34 +107,41 @@ def crawl(root, wanted_content=[], within_domain=True):
     print(extracted)
     return list(visited), extracted
 
-
 def extract_information(address, html):
-    '''Extract contact information from html, returning a list of (url, category, content) pairs,
-    where category is one of PHONE, ADDRESS, EMAIL'''
-
+    '''
+    Return a list of (url, CATEGORY, VALUE) tuples where
+    CATEGORY ∈ {PHONE, EMAIL, ADDRESS}.
+    '''
     if isinstance(html, (bytes, bytearray)):
         html = html.decode('utf-8', errors='ignore')
     text = BeautifulSoup(html, 'html.parser').get_text(" ", strip=True)
+    #scan raw html for any emails we might be missing
+    raw = html
 
-    alt = re.sub(r'(?i)\s*(\(|\[)?\s*at\s*(\)|\])?\s*', '@',  text)
+    alt = re.sub(r'(?i)\s*(\(|\[)?\s*at\s*(\)|\])?\s*', '@', text)
     alt = re.sub(r'(?i)\s*(\(|\[)?\s*dot\s*(\)|\])?\s*', '.', alt)
 
+    #regex patterns
     phone_re   = re.compile(r'\(?\b\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b')
     email_re   = re.compile(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}')
     address_re = re.compile(
         r'[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*\s*,\s*'
         r'(?:[A-Z]{2}|[A-Z][a-z]+\.?(?:\s+[A-Z][a-z]+\.?)*)\s+'
         r'\d{5}(?:-\d{4})?',
-        re.IGNORECASE)
-    
-    results = set()
-    for m in phone_re.findall(text):
-        results.add((address, 'PHONE', m))
-    for m in email_re.findall(text) + email_re.findall(alt):
-        results.add((address, 'EMAIL', m))
-    for m in address_re.findall(text):
-        results.add((address, 'ADDRESS', m.strip()))
+        re.IGNORECASE
+    )
 
+    results = set()
+    for m in phone_re.finditer(text):
+        results.add((address, 'PHONE', m.group()))
+    for m in email_re.finditer(raw):
+        results.add((address, 'EMAIL', m.group()))
+    for m in email_re.finditer(text):
+        results.add((address, 'EMAIL', m.group()))
+    for m in email_re.finditer(alt):
+        results.add((address, 'EMAIL', m.group()))
+    for m in address_re.finditer(text):
+        results.add((address, 'ADDRESS', m.group().strip()))
     return list(results)
 
 
